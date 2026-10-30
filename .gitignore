@@ -1,0 +1,45 @@
+# Visual Studio cache and user settings
+.vs/
+*.user
+*.suo
+*.VC.db
+*.VC.opendb
+ipch/
+*.aps
+
+# Build output
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Bb]in/
+[Oo]bj/
+*.obj
+*.pdb
+*.ilk
+*.idb
+*.tlog
+*.log
+*.exe
+*.dll
+*.lib
+*.exp
+
+# Large TIPS media (GitHub rejects files over 100 MB)
+*.avi
+*.mp4
+
+# Windows
+Thumbs.db
+desktop.ini
+
+# Downloads / archives
+*.zip
+*.crdownload
+
+# More large media and VS databases
+*.mov
+*.wmv
+*.mpg
+*.mpeg
+*.sdf
