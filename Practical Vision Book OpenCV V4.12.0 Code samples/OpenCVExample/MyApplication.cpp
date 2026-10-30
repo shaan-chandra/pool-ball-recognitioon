@@ -71,6 +71,12 @@ void drawCircle(Mat& image, int table_number) {
 		}
 	}
 }
+
+Mat convertToHLS(Mat& image) {
+	Mat hls_image; 
+	cvtColor(image, hls_image, COLOR_BGR2HLS);
+	return hls_image;
+}
 void MyApplication()
 {
 	string image_files[6] = {
@@ -89,7 +95,17 @@ void MyApplication()
 			return;
 		}
 		flat_images[i] = gridTable(image);
-		drawCircle(flat_images[i], i);
+		Mat display = flat_images[i].clone();
+		drawCircle(display, i);
+		imshow("Answers", display);
+
+		// Step 5: HLS channels
+		Mat hls = convertToHLS(flat_images[i]);
+		vector<Mat> channels;
+		split(hls, channels);
+		imshow("Hue", channels[0]);
+		imshow("Lightness", channels[1]);
+		imshow("Saturation", channels[2]);
 		imshow("Table ", flat_images[i]);
 		waitKey(0); 
 		destroyAllWindows();
