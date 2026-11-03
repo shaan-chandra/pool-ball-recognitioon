@@ -11,6 +11,7 @@ const Point2f table_corner[4] = {
 	Point2f(1888.0f, 451.0f) // bottom right 
 };
 
+// ground truth values of the ball positions will be later used for comparision 
 const Point table_answers[6][16] = {
 	{ // Table1 coordinates for balls
 		Point(1092, 309), Point(1212, 429), Point(1174, 353), Point(1050, 335),   // balls 1-4  (2, 4 corrected)
@@ -77,6 +78,16 @@ Mat convertToHLS(Mat& image) {
 	cvtColor(image, hls_image, COLOR_BGR2HLS);
 	return hls_image;
 }
+
+vector<Vec3f> findCircles(const Mat& channel) {
+	Mat median_blurred; 
+	medianBlur(channel, median_blurred, 5);
+
+	imshow("Median blurred", median_blurred);
+	vector<Vec3f> circles;
+	HoughCircles(median_blurred, circles, HOUGH_GRADIENT, 1, 40, 50, 15, 18, 25);
+	return circles;
+}
 void MyApplication()
 {
 	string image_files[6] = {
@@ -95,9 +106,6 @@ void MyApplication()
 			return;
 		}
 		flat_images[i] = gridTable(image);
-		Mat display = flat_images[i].clone();
-		drawCircle(display, i);
-		imshow("Answers", display);
 
 		// Step 5: HLS channels
 		Mat hls = convertToHLS(flat_images[i]);
@@ -107,6 +115,14 @@ void MyApplication()
 		imshow("Lightness", channels[1]);
 		imshow("Saturation", channels[2]);
 		imshow("Table ", flat_images[i]);
+		vector<Vec3f> circles = findCircles(channels[1]);
+		cout << "Table " << i + 1 << ": " << circles.size() << " circles found" << endl;
+		Mat found = flat_images[i].clone();
+		for (size_t c = 0; c < circles.size(); c++) {
+			Point centre(cvRound(circles[c][0]), cvRound(circles[c][1]));
+			circle(found, centre, 21, Scalar(0, 255, 0), 2);
+		}
+		imshow("Hough circles", found);
 		waitKey(0); 
 		destroyAllWindows();
 	}
