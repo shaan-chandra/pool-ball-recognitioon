@@ -50,17 +50,19 @@ const Point table_answers[6][16] = {
 		Point(-1, -1), Point(901, 169), Point(1201, 399), Point(947, 629)         // balls 13, 14, 15, White
 	}
 };
-
-Mat gridTable(const Mat& image) {
+Mat getTableMatrix() {
 	Point2f flat_table[4] = {
 		Point2f(0.0f, 0.0f),// top left
 		Point2f(table_width - 1.0f, 0.0f), // top right 
 		Point2f(0, table_height - 1.0f), // bottom left 
 		Point2f(table_width - 1.0f, table_height - 1.0f) // bottom right 
 	};
-	Mat table_matrix = getPerspectiveTransform(table_corner, flat_table);
+	return getPerspectiveTransform(table_corner, flat_table);
+}
+
+Mat gridTable(const Mat& image) {
 	Mat flat_image; 
-	warpPerspective(image, flat_image, table_matrix, Size(table_width, table_height));
+	warpPerspective(image, flat_image, getTableMatrix(), Size(table_width, table_height));
 	return flat_image;
 }
 
@@ -84,8 +86,37 @@ vector<Vec3f> findCircles(const Mat& channel) {
 	medianBlur(channel, median_blurred, 5);
 
 	vector<Vec3f> circles;
-	HoughCircles(median_blurred, circles, HOUGH_GRADIENT, 1, 40, 50, 15, 18, 32);
+	HoughCircles(median_blurred, circles, HOUGH_GRADIENT, 1, 30, 50, 15, 16, 30);
 	return circles;
+}
+vector<Vec3f> centerInTable(const vector<Vec3f>& circles) {
+	// find only circles with center in table or else hough will give wrong 
+	vector<Point2f> border = { table_corner[0], table_corner[1], table_corner[3], table_corner[2] }; // top left, top right, bottom left, bottom right
+	vector<Vec3f> tmp;
+	for (int i = 0; i < circles.size(); i++) {
+		Point2f center(circles[i][0], circles[i][1]);
+		if (pointPolygonTest(border, center, false) >= 0) {
+			tmp.push_back(circles[i]);
+		}
+	}
+	return tmp;
+}
+vector<Vec3f> toFlat(const vector<Vec3f>& circles) {
+	if (circles.empty()) {
+		return circles;
+	}
+	vector<Point2f> photo_points; 
+	for (int i = 0; i < circles.size(); i++) {
+		photo_points.push_back(Point2f(circles[i][0], circles[i][1]));
+	}
+	vector<Point2f> flat_points;
+	perspectiveTransform(photo_points, flat_points, getTableMatrix());
+
+	vector<Vec3f> rebuild_circles;
+	for (int i = 0; i < circles.size(); i++) {
+		rebuild_circles.push_back(Vec3f(flat_points[i].x, flat_points[i].y, circles[i][2]));
+	}
+	return rebuild_circles;
 }
 vector<Vec3f> mergeCircles(const vector<vector<Vec3f>>& lists, float min_distance) {
 	vector<Vec3f> merged; 
@@ -114,10 +145,12 @@ vector<Vec3f> findCirclesInChannels(const vector<Mat>& channels) {
 	vector < vector<Vec3f>> lists;
 	for (int channel = 0; channel < channels.size(); channel++) {
 		vector<Vec3f> found = findCircles(channels[channel]);
+		found = centerInTable(found);
+		found = toFlat(found);
 		cout << "  " << names[channel] << ": " << found.size() << " circles" << endl;
 		lists.push_back(found);
 	}
-	return mergeCircles(lists, 30);
+	return mergeCircles(lists, 20);
 }
 
 bool isPocket(Point2f center) {
@@ -179,7 +212,7 @@ void MyApplication()
 		flat_images[i] = gridTable(image);
 
 		// Step 5: HLS channels
-		Mat hls = convertToHLS(flat_images[i]);
+		Mat hls = convertToHLS(image);
 		vector<Mat> channels;
 		split(hls, channels);
 		imshow("Hue", channels[0]);
