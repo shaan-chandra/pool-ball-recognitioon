@@ -83,10 +83,81 @@ vector<Vec3f> findCircles(const Mat& channel) {
 	Mat median_blurred; 
 	medianBlur(channel, median_blurred, 5);
 
-	imshow("Median blurred", median_blurred);
 	vector<Vec3f> circles;
-	HoughCircles(median_blurred, circles, HOUGH_GRADIENT, 1, 40, 50, 15, 18, 25);
+	HoughCircles(median_blurred, circles, HOUGH_GRADIENT, 1, 40, 50, 15, 18, 32);
 	return circles;
+}
+vector<Vec3f> mergeCircles(const vector<vector<Vec3f>>& lists, float min_distance) {
+	vector<Vec3f> merged; 
+	// assumed lists holds the channels 
+	for (int i = 0; i < (int)lists.size(); i++) {
+		for (int j = 0; j < lists[i].size(); j++) {
+			Point2f center(lists[i][j][0], lists[i][j][1]);
+			bool duplicate = false;
+			for (int check = 0; check< merged.size(); check++) {
+				Point2f kept_center(merged[check][0], merged[check][1]);
+				if (norm(center - kept_center) < min_distance) {
+					duplicate = true; 
+					break; 
+				}
+			}
+			if (!duplicate) {
+				merged.push_back(lists[i][j]);
+			}
+		}
+	}
+	return merged;
+}
+vector<Vec3f> findCirclesInChannels(const vector<Mat>& channels) {
+	string names[3] = { "hue", "lightness", "saturation",
+	};
+	vector < vector<Vec3f>> lists;
+	for (int channel = 0; channel < channels.size(); channel++) {
+		vector<Vec3f> found = findCircles(channels[channel]);
+		cout << "  " << names[channel] << ": " << found.size() << " circles" << endl;
+		lists.push_back(found);
+	}
+	return mergeCircles(lists, 30);
+}
+
+bool isPocket(Point2f center) {
+	Point2f pockets[6] = {
+		Point2f(0,0),
+		Point2f((table_width - 1) / 2.0f, 0.0f),
+		Point2f(table_width - 1, 0.0f),
+		Point2f(0.0f, table_height - 1),
+		Point2f((table_width - 1) / 2.0f, table_height - 1),
+		Point2f(table_width - 1, table_height - 1)
+	};
+	for (int p = 0; p < 6; p++) {
+		if (norm(center - pockets[p]) < 60) {
+			return true;
+		}
+	}
+	return false;
+}
+
+bool isNearEdge(Point2f center) {
+	const float edge_distance = 18.0f;
+	if (center.x < edge_distance ||
+		center.x >(table_width - 1) - edge_distance ||
+		center.y < edge_distance ||
+		center.y >(table_height - 1) - edge_distance) {
+		return true;
+	}
+	return false;
+}
+vector<Vec3f> removePocketsAndEdges(const vector<Vec3f>& circle) {
+	vector<Vec3f> kept;
+	for (int i = 0; i < circle.size(); i++) {
+		// get circle's center as a point2f
+		Point2f center = Point2f(circle[i][0], circle[i][1]);
+		// call isPocket and isNearEdge to see if it is if not add to kept 
+		if (!isPocket(center) && !isNearEdge(center)) {
+			kept.push_back(circle[i]);
+		}
+	}
+	return kept;
 }
 void MyApplication()
 {
@@ -115,7 +186,9 @@ void MyApplication()
 		imshow("Lightness", channels[1]);
 		imshow("Saturation", channels[2]);
 		imshow("Table ", flat_images[i]);
-		vector<Vec3f> circles = findCircles(channels[1]);
+		cout << "Table " << i + 1 << ":" << endl;
+		vector<Vec3f> circles = findCirclesInChannels(channels);
+		circles = removePocketsAndEdges(circles);
 		cout << "Table " << i + 1 << ": " << circles.size() << " circles found" << endl;
 		Mat found = flat_images[i].clone();
 		for (size_t c = 0; c < circles.size(); c++) {
