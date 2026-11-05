@@ -86,7 +86,7 @@ vector<Vec3f> findCircles(const Mat& channel) {
 	medianBlur(channel, median_blurred, 5);
 
 	vector<Vec3f> circles;
-	HoughCircles(median_blurred, circles, HOUGH_GRADIENT, 1, 30, 50, 15, 16, 30);
+	HoughCircles(median_blurred, circles, HOUGH_GRADIENT, 1, 30, 50, 15, 15, 28);
 	return circles;
 }
 vector<Vec3f> centerInTable(const vector<Vec3f>& circles) {
@@ -118,8 +118,8 @@ vector<Vec3f> toFlat(const vector<Vec3f>& circles) {
 	}
 	return rebuild_circles;
 }
-vector<Vec3f> mergeCircles(const vector<vector<Vec3f>>& lists, float min_distance) {
-	vector<Vec3f> merged; 
+vector<Vec4f> mergeCircles(const vector<vector<Vec3f>>& lists, float min_distance) {
+	vector<Vec4f> merged; 
 	// assumed lists holds the channels 
 	for (int i = 0; i < (int)lists.size(); i++) {
 		for (int j = 0; j < lists[i].size(); j++) {
@@ -128,18 +128,19 @@ vector<Vec3f> mergeCircles(const vector<vector<Vec3f>>& lists, float min_distanc
 			for (int check = 0; check< merged.size(); check++) {
 				Point2f kept_center(merged[check][0], merged[check][1]);
 				if (norm(center - kept_center) < min_distance) {
+					merged[check][3] += 1;
 					duplicate = true; 
 					break; 
 				}
 			}
 			if (!duplicate) {
-				merged.push_back(lists[i][j]);
+				merged.push_back(Vec4f(lists[i][j][0], lists[i][j][1], lists[i][j][2], 1));
 			}
 		}
 	}
 	return merged;
 }
-vector<Vec3f> findCirclesInChannels(const vector<Mat>& channels) {
+vector<Vec4f> findCirclesInChannels(const vector<Mat>& channels) {
 	string names[3] = { "hue", "lightness", "saturation",
 	};
 	vector < vector<Vec3f>> lists;
@@ -153,7 +154,7 @@ vector<Vec3f> findCirclesInChannels(const vector<Mat>& channels) {
 	return mergeCircles(lists, 20);
 }
 
-bool isPocket(Point2f center) {
+bool isPocket(Point2f center, float zone) {
 	Point2f pockets[6] = {
 		Point2f(0,0),
 		Point2f((table_width - 1) / 2.0f, 0.0f),
@@ -163,7 +164,7 @@ bool isPocket(Point2f center) {
 		Point2f(table_width - 1, table_height - 1)
 	};
 	for (int p = 0; p < 6; p++) {
-		if (norm(center - pockets[p]) < 60) {
+		if (norm(center - pockets[p]) < zone) {
 			return true;
 		}
 	}
@@ -180,17 +181,78 @@ bool isNearEdge(Point2f center) {
 	}
 	return false;
 }
-vector<Vec3f> removePocketsAndEdges(const vector<Vec3f>& circle) {
-	vector<Vec3f> kept;
+vector<Vec4f> removePocketsAndEdges(const vector<Vec4f>& circle) {
+	vector<Vec4f> kept;
 	for (int i = 0; i < circle.size(); i++) {
 		// get circle's center as a point2f
 		Point2f center = Point2f(circle[i][0], circle[i][1]);
 		// call isPocket and isNearEdge to see if it is if not add to kept 
-		if (!isPocket(center) && !isNearEdge(center)) {
+		bool at_pocket = isPocket(center, 60);
+		bool near_pocket = isPocket(center, 110);
+		bool confirmed = circle[i][3] >= 2;
+		if (!at_pocket && !isNearEdge(center) && (!near_pocket || confirmed)) {
 			kept.push_back(circle[i]);
 		}
 	}
 	return kept;
+}
+
+struct Score {
+	int found = 0;
+	int false_detection = 0;
+	int missed = 0;
+};
+
+Score scoreTable(const vector<Vec4f>& detections, int table_number, float range) {
+	// basically just compare the balls found to the ground truth described at the start of the table 
+	// < 16 because that is table_answer size 
+	Score s;
+	vector<bool> flag(detections.size(), false);
+	int actual_balls = 0; // actual balls in the photo as per the ground truth
+	for (int i = 0; i < 16; i++) {
+		Point ball_position = table_answers[table_number][i]; 
+		// check for missing balls 
+		if (ball_position.x == -1) {
+			continue;
+		}
+		actual_balls++;
+		for (int j = 0; j < detections.size(); j++) {
+			if (flag[j]){
+				continue;
+			}
+			Point2f position(detections[j][0], detections[j][1]);
+			// compare distance 
+			float distance = norm(position - Point2f(ball_position.x, ball_position.y));
+			if (distance <= range) {
+				// found ball add it 
+				s.found++;
+				flag[j] = true;
+				// since it is comparing each ball with table answer break to get next i value
+				break;
+			}
+		}
+	}
+	// calculate false_detection and missed here 
+	// false detection 
+	s.false_detection = detections.size() - s.found;
+	s.missed = actual_balls - s.found;
+	return s;
+}
+
+void printScore(string label, Score s) {
+	int detections = s.found + s.false_detection;
+	int all_balls = s.found + s.missed; 
+
+	double precision = (detections > 0)? (double)s.found / detections : 0; 
+	double recall = (all_balls > 0) ? (double)s.found / all_balls: 0; 
+	double F1 = (precision + recall > 0) ? 2 * precision * recall / (precision + recall) : 0;
+	cout << "label: " << label << endl;
+	cout << "found: " << s.found << endl;
+	cout << "false positives: " << s.false_detection << endl;
+	cout << "missed detections: " << s.missed << endl;
+	cout << "precision: " << precision << endl;
+	cout << "recall: " << recall << endl;
+	cout << "F1: " << F1 << endl;
 }
 void MyApplication()
 {
@@ -203,6 +265,7 @@ void MyApplication()
 		"Media/Pool/Table6.jpeg"
 	};
 	Mat flat_images[6];
+	Score total;
 	for (int i = 0; i < 6; i++) {
 		Mat image = imread(image_files[i]);
 		if (image.empty()) {
@@ -220,8 +283,13 @@ void MyApplication()
 		imshow("Saturation", channels[2]);
 		imshow("Table ", flat_images[i]);
 		cout << "Table " << i + 1 << ":" << endl;
-		vector<Vec3f> circles = findCirclesInChannels(channels);
+		vector<Vec4f> circles = findCirclesInChannels(channels);
 		circles = removePocketsAndEdges(circles);
+		Score s = scoreTable(circles, i, 21);
+		printScore("Table " + to_string(i + 1), s);
+		total.found += s.found;
+		total.false_detection += s.false_detection;
+		total.missed += s.missed;
 		cout << "Table " << i + 1 << ": " << circles.size() << " circles found" << endl;
 		Mat found = flat_images[i].clone();
 		for (size_t c = 0; c < circles.size(); c++) {
@@ -232,5 +300,6 @@ void MyApplication()
 		waitKey(0); 
 		destroyAllWindows();
 	}
+	printScore("overall: ", total);
 }
 
