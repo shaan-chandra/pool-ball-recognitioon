@@ -12,16 +12,16 @@ const Point2f table_corner[4] = {
 };
 
 // ground truth values of the ball positions will be later used for comparision 
-const Point table_answers[6][16] = {
+const Point table_answers[7][16] = {
 	{ // Table1 coordinates for balls
-		Point(1092, 309), Point(1212, 429), Point(1174, 353), Point(1050, 335),   // balls 1-4  (2, 4 corrected)
+		Point(1092, 309), Point(1212, 429), Point(1131, 383), Point(1050, 335),   // balls 1-4
 		Point(1211, 285), Point(1170, 261), Point(1173, 352), Point(1132, 331),   // balls 5-8
-		Point(1210, 240), Point(1170, 310), Point(1169, 407), Point(1135, 281),   // balls 9-12 (11 corrected)
+		Point(1210, 240), Point(1170, 310), Point(1169, 407), Point(1135, 281),   // balls 9-12
 		Point(1212, 374), Point(1091, 360), Point(1213, 331), Point(29, 288)      // balls 13, 14, 15, White
 	},
 	{ // Table2 coordinates for balls
-		Point(1103, 282), Point(1224, 620), Point(1121, 391), Point(1305, 310),   // balls 1-4
-		Point(1046, 315), Point(621, 202), Point(1173, 361), Point(1132, 331),    // balls 5-8
+		Point(1103, 282), Point(1224, 620), Point(1121, 391), Point(1046, 315),   // balls 1-4
+		Point(1305, 310), Point(621, 202), Point(1173, 361), Point(1132, 331),    // balls 5-8
 		Point(725, 177), Point(1269, 185), Point(798, 665), Point(438, 296),      // balls 9-12
 		Point(1235, 53), Point(1090, 362), Point(1205, 399), Point(1169, 507)     // balls 13, 14, 15, White
 	},
@@ -48,6 +48,12 @@ const Point table_answers[6][16] = {
 		Point(1406, 305), Point(25, 131), Point(1294, 260), Point(1252, 226),     // balls 5-8
 		Point(72, 538), Point(1270, 171), Point(-1, -1), Point(351, 249),         // balls 9-12
 		Point(-1, -1), Point(901, 169), Point(1201, 399), Point(947, 629)         // balls 13, 14, 15, White
+	},
+	{ // AllBalls coordinates for balls
+		Point(908, 253), Point(959, 250), Point(1013, 255), Point(1072, 256),   // balls 1-4
+		Point(1132, 254), Point(1184, 262), Point(1244, 256), Point(1307, 253), // balls 5-8
+		Point(901, 329), Point(961, 330), Point(1013, 335), Point(1067, 336),   // balls 9-12
+		Point(1130, 334), Point(1187, 345), Point(1245, 342), Point(797, 293)   // balls 13, 14, 15, White
 	}
 };
 Mat getTableMatrix() {
@@ -65,17 +71,7 @@ Mat gridTable(const Mat& image) {
 	warpPerspective(image, flat_image, getTableMatrix(), Size(table_width, table_height));
 	return flat_image;
 }
-
-void drawCircle(Mat& image, int table_number) {
-	for (int i = 0; i < 16; i++) {
-		Point point_ball = table_answers[table_number][i];
-		if (point_ball.x != -1) {
-			circle(image, point_ball, 21, Scalar(0, 0, 255), 2);
-		}
-	}
-}
-
-Mat convertToHLS(Mat& image) {
+Mat convertToHLS(const Mat& image) {
 	Mat hls_image; 
 	cvtColor(image, hls_image, COLOR_BGR2HLS);
 	return hls_image;
@@ -86,7 +82,7 @@ vector<Vec3f> findCircles(const Mat& channel) {
 	medianBlur(channel, median_blurred, 5);
 
 	vector<Vec3f> circles;
-	HoughCircles(median_blurred, circles, HOUGH_GRADIENT, 1, 30, 50, 15, 15, 28);
+	HoughCircles(median_blurred, circles, HOUGH_GRADIENT, 1, 28, 80, 15, 15, 28);
 	return circles;
 }
 vector<Vec3f> centerInTable(const vector<Vec3f>& circles) {
@@ -238,6 +234,78 @@ Score scoreTable(const vector<Vec4f>& detections, int table_number, float range)
 	s.missed = actual_balls - s.found;
 	return s;
 }
+vector<Vec4f> locateBalls(const Mat& image) {
+	// wrapping whole of stage 1 into one function that calls all stage 1 functions so that i find it easier to implement stage 2.
+	Mat hls = convertToHLS(image); 
+	vector<Mat> channels;
+	split(hls, channels);
+	vector<Vec4f> circles = findCirclesInChannels(channels);
+	return removePocketsAndEdges(circles);
+}
+
+vector<Mat> ballMasks(Size size, const vector<Vec4f>& circles, int radius) {
+	vector<Mat> masks;
+	for (int i = 0; i < circles.size(); i++) {
+		Mat mask(size, CV_8UC1, Scalar(0));
+		Point center(cvRound(circles[i][0]), cvRound(circles[i][1]));
+		// mark each detected ball in the circle 
+		circle(mask, center, radius, Scalar(255, 255, 255), FILLED);
+		masks.push_back(mask);
+	}
+	return masks;
+}
+vector<Mat> describeBalls(const Mat channel, const vector<Mat>& masks, int bins, float max_value) {
+	// basically get histogram from the detected circles mask that we previously built
+	// compare against all balls to mark balls
+	vector<Mat> histogram;
+	int hist_channels[] = {0};
+	int hist_size[] = {bins};
+	float range[] = {0.0f, max_value};
+	const float* ranges[] = { range };
+	for (int i = 0; i < masks.size(); i++) {
+		Mat hist;
+		calcHist(&channel, 1, hist_channels, masks[i], hist, 1, hist_size, ranges);
+		normalize(hist, hist, 1, 0, NORM_L1);
+		histogram.push_back(hist);
+	}
+	return histogram;
+}
+
+// to draw histogram code copied from histogram.cpp
+void Draw1DHistogram(MatND histograms[], int number_of_histograms, Mat& display_image)
+{
+	int number_of_bins = histograms[0].size[0];
+	double max_value = 0, min_value = 0;
+	double channel_max_value = 0, channel_min_value = 0;
+	for (int channel = 0; (channel < number_of_histograms); channel++)
+	{
+		minMaxLoc(histograms[channel], &channel_min_value, &channel_max_value, 0, 0);
+		max_value = ((max_value > channel_max_value) && (channel > 0)) ? max_value : channel_max_value;
+		min_value = ((min_value < channel_min_value) && (channel > 0)) ? min_value : channel_min_value;
+	}
+	float scaling_factor = ((float)256.0) / ((float)number_of_bins);
+
+	Mat histogram_image((int)(((float)number_of_bins) * scaling_factor) + 1, (int)(((float)number_of_bins) * scaling_factor) + 1, CV_8UC3, Scalar(255, 255, 255));
+	display_image = histogram_image;
+	line(histogram_image, Point(0, 0), Point(0, histogram_image.rows - 1), Scalar(0, 0, 0));
+	line(histogram_image, Point(histogram_image.cols - 1, histogram_image.rows - 1), Point(0, histogram_image.rows - 1), Scalar(0, 0, 0));
+	int highest_point = static_cast<int>(0.9 * ((float)number_of_bins) * scaling_factor);
+	for (int channel = 0; (channel < number_of_histograms); channel++)
+	{
+		int last_height;
+		for (int h = 0; h < number_of_bins; h++)
+		{
+			float value = histograms[channel].at<float>(h);
+			int height = static_cast<int>(value * highest_point / max_value);
+			int where = (int)(((float)h) * scaling_factor);
+			if (h > 0)
+				line(histogram_image, Point((int)(((float)(h - 1)) * scaling_factor) + 1, (int)(((float)number_of_bins) * scaling_factor) - last_height),
+					Point((int)(((float)h) * scaling_factor) + 1, (int)(((float)number_of_bins) * scaling_factor) - height),
+					Scalar(channel == 0 ? 255 : 0, channel == 1 ? 255 : 0, channel == 2 ? 255 : 0));
+			last_height = height;
+		}
+	}
+}
 
 void printScore(string label, Score s) {
 	int detections = s.found + s.false_detection;
@@ -256,17 +324,18 @@ void printScore(string label, Score s) {
 }
 void MyApplication()
 {
-	string image_files[6] = {
+	string image_files[7] = {
 		"Media/Pool/Table1.jpeg",
 		"Media/Pool/Table2.jpeg",
 		"Media/Pool/Table3.jpeg",
 		"Media/Pool/Table4.jpeg",
 		"Media/Pool/Table5.jpeg",
-		"Media/Pool/Table6.jpeg"
+		"Media/Pool/Table6.jpeg",
+		"Media/Pool/AllBalls.jpeg"
 	};
-	Mat flat_images[6];
+	Mat flat_images[7];
 	Score total;
-	for (int i = 0; i < 6; i++) {
+	for (int i = 0; i < 7; i++) {
 		Mat image = imread(image_files[i]);
 		if (image.empty()) {
 			cout << "Could not open image" << image_files[i] << endl;
@@ -274,7 +343,6 @@ void MyApplication()
 		}
 		flat_images[i] = gridTable(image);
 
-		// Step 5: HLS channels
 		Mat hls = convertToHLS(image);
 		vector<Mat> channels;
 		split(hls, channels);
@@ -287,10 +355,25 @@ void MyApplication()
 		circles = removePocketsAndEdges(circles);
 		Score s = scoreTable(circles, i, 21);
 		printScore("Table " + to_string(i + 1), s);
-		total.found += s.found;
-		total.false_detection += s.false_detection;
-		total.missed += s.missed;
-		cout << "Table " << i + 1 << ": " << circles.size() << " circles found" << endl;
+		if (i < 6) {
+			total.found += s.found;
+			total.false_detection += s.false_detection;
+			total.missed += s.missed;
+			cout << "Table " << i + 1 << ": " << circles.size() << " circles found" << endl;
+		}
+		Mat flat_hls = convertToHLS(flat_images[i]);
+		vector<Mat> flat_channels;
+		split(flat_hls, flat_channels);
+		vector<Mat> masks = ballMasks(flat_images[i].size(), circles, 16);
+		vector<Mat> hue_hists = describeBalls(flat_channels[0], masks, 18, 180);
+		vector<Mat> light_hists = describeBalls(flat_channels[1], masks, 16, 256);
+		for (size_t k = 0; k < circles.size(); k++) {
+			Point hue_peak, light_peak;
+			minMaxLoc(hue_hists[k], 0, 0, 0, &hue_peak);
+			minMaxLoc(light_hists[k], 0, 0, 0, &light_peak);
+			cout << "  (" << cvRound(circles[k][0]) << ", " << cvRound(circles[k][1]) << ")"
+				<< "  hue bin " << hue_peak.y << "  light bin " << light_peak.y << endl;
+		}
 		Mat found = flat_images[i].clone();
 		for (size_t c = 0; c < circles.size(); c++) {
 			Point centre(cvRound(circles[c][0]), cvRound(circles[c][1]));
