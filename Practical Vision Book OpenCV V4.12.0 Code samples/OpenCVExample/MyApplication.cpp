@@ -322,20 +322,76 @@ void printScore(string label, Score s) {
 	cout << "recall: " << recall << endl;
 	cout << "F1: " << F1 << endl;
 }
+void analyseImage(const Mat& image, vector<Vec4f>& circles, vector<Mat>& hue_histograms, vector<Mat>& light_histogram) {
+	// this function fills the data needed for stage 2 and is reusable. 
+	circles = locateBalls(image);
+	Mat flat_image = gridTable(image);
+	Mat hls = convertToHLS(flat_image);
+	vector<Mat> channels;
+	split(hls, channels);
+	vector<Mat> masks = ballMasks(flat_image.size(), circles, 16);
+	hue_histograms = describeBalls(channels[0], masks, 18, 180);
+	light_histogram = describeBalls(channels[1], masks, 16, 256);
+}
+vector<int> identifyBall(const vector<Vec4f>& circles, const Point tableAnswers[16]) {
+	vector<int> results;
+	for (int i = 0; i < circles.size(); i++) {
+		Point2f center(circles[i][0], circles[i][1]);
+		// compare to ground truth from table_answers above to see what ball it is resubale function will be used for comparing
+		// all balls and detected balls
+		double best = 1e9;
+		int best_ball = -1;
+		for (int j = 0; j < 16; j++) {
+			if (tableAnswers[j].x < 0) {
+				continue;
+			}
+			double distance = norm(center - Point2f(tableAnswers[j]));
+			if (distance < best) {
+				best = distance;
+				best_ball = j;
+			}
+		}
+		results.push_back(best_ball);
+	}
+	return results;
+}
+int nameBall(const Mat& hue, const Mat& light, const vector<Mat>& hue_ref, const vector<Mat>& light_ref) {
+	double best = 1e9;
+	int best_ball = -1;
+	for (int i = 0; i < 16; i++) {
+		double distance = compareHist(hue, hue_ref[i], HISTCMP_BHATTACHARYYA) + compareHist(light, light_ref[i], HISTCMP_BHATTACHARYYA);
+		if (distance < best) {
+			best = distance;
+			best_ball = i;
+		}
+	}
+	return best_ball;
+}
 void MyApplication()
 {
-	string image_files[7] = {
+	string image_files[6] = {
 		"Media/Pool/Table1.jpeg",
 		"Media/Pool/Table2.jpeg",
 		"Media/Pool/Table3.jpeg",
 		"Media/Pool/Table4.jpeg",
 		"Media/Pool/Table5.jpeg",
-		"Media/Pool/Table6.jpeg",
-		"Media/Pool/AllBalls.jpeg"
+		"Media/Pool/Table6.jpeg"
 	};
-	Mat flat_images[7];
+	Mat flat_images[6];
 	Score total;
-	for (int i = 0; i < 7; i++) {
+	Mat allBalls_image = imread("Media/Pool/AllBalls.jpeg");
+	vector<Vec4f> allBalls_circles;
+	vector<Mat> allBalls_hueHistogram; vector<Mat> allBalls_lightHistogram;
+	analyseImage(allBalls_image, allBalls_circles, allBalls_hueHistogram, allBalls_lightHistogram);
+	vector<int> allBalls_numbers = identifyBall(allBalls_circles, table_answers[6]);
+	vector<Mat> reference_hue(16); vector<Mat> reference_light(16);
+	for (int i = 0; i < allBalls_circles.size(); i++) {
+		int n = allBalls_numbers[i];
+		reference_hue[n] = allBalls_hueHistogram[i];
+		reference_light[n] = allBalls_lightHistogram[i];
+		cout << "circle " << i << " -> ball " << n + 1 << endl;
+	}
+	for (int i = 0; i < 6; i++) {
 		Mat image = imread(image_files[i]);
 		if (image.empty()) {
 			cout << "Could not open image" << image_files[i] << endl;
@@ -378,6 +434,10 @@ void MyApplication()
 		for (size_t c = 0; c < circles.size(); c++) {
 			Point centre(cvRound(circles[c][0]), cvRound(circles[c][1]));
 			circle(found, centre, 21, Scalar(0, 255, 0), 2);
+
+			int name = nameBall(hue_hists[c], light_hists[c], reference_hue, reference_light);
+			string label = (name == 15) ? "W" : to_string(name + 1);
+			putText(found, label, centre + Point(-10, -25), FONT_HERSHEY_SIMPLEX, 0.6, Scalar(0, 0, 255), 2);
 		}
 		imshow("Hough circles", found);
 		waitKey(0); 
