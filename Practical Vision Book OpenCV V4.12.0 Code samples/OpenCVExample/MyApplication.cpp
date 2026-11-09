@@ -1,5 +1,6 @@
 ﻿
 #include "Utilities.h"
+#include <iomanip>
 
 const int table_width = 1434;
 const int table_height = 683;
@@ -306,6 +307,22 @@ void Draw1DHistogram(MatND histograms[], int number_of_histograms, Mat& display_
 		}
 	}
 }
+// scoring for identifying balls
+struct nameScore {
+	int named = 0;
+	int correct = 0;
+};
+nameScore scoreBalls(const vector<int>& names, const vector<int>& truth, int confusion[16][16]) {
+	nameScore s;
+	for (int i = 0; i < names.size(); i++) {
+		s.named++;
+		if (names[i] == truth[i]) {
+			s.correct++;
+		}
+		confusion[truth[i]][names[i]]++;
+	}
+	return s;
+}
 
 void printScore(string label, Score s) {
 	int detections = s.found + s.false_detection;
@@ -391,6 +408,8 @@ void MyApplication()
 		reference_light[n] = allBalls_lightHistogram[i];
 		cout << "circle " << i << " -> ball " << n + 1 << endl;
 	}
+	int confusion[16][16] = {};
+	nameScore name_total;
 	for (int i = 0; i < 6; i++) {
 		Mat image = imread(image_files[i]);
 		if (image.empty()) {
@@ -430,19 +449,35 @@ void MyApplication()
 			cout << "  (" << cvRound(circles[k][0]) << ", " << cvRound(circles[k][1]) << ")"
 				<< "  hue bin " << hue_peak.y << "  light bin " << light_peak.y << endl;
 		}
+		vector<int> names;
 		Mat found = flat_images[i].clone();
 		for (size_t c = 0; c < circles.size(); c++) {
 			Point centre(cvRound(circles[c][0]), cvRound(circles[c][1]));
 			circle(found, centre, 21, Scalar(0, 255, 0), 2);
 
 			int name = nameBall(hue_hists[c], light_hists[c], reference_hue, reference_light);
+			names.push_back(name);
 			string label = (name == 15) ? "W" : to_string(name + 1);
 			putText(found, label, centre + Point(-10, -25), FONT_HERSHEY_SIMPLEX, 0.6, Scalar(0, 0, 255), 2);
 		}
+		vector<int> truth = identifyBall(circles, table_answers[i]);
+		nameScore ns = scoreBalls(names, truth, confusion);
+		cout << "Table " << i + 1 << " naming: " << ns.correct << " / " << ns.named << endl;
+		name_total.named += ns.named;
+		name_total.correct += ns.correct;
 		imshow("Hough circles", found);
 		waitKey(0); 
 		destroyAllWindows();
 	}
 	printScore("overall: ", total);
+	cout << "Overall naming: " << name_total.correct << " / " << name_total.named
+		<< " = " << (double)name_total.correct / name_total.named << endl;
+	cout << "End to end: " << (double)name_total.correct / (total.found + total.missed) << endl;
+	for (int r = 0; r < 16; r++) {
+		for (int c = 0; c < 16; c++) {
+			cout << setw(3) << confusion[r][c];
+		}
+		cout << endl;
+	}
 }
 
