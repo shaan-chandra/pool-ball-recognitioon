@@ -145,7 +145,6 @@ vector<Vec4f> findCirclesInChannels(const vector<Mat>& channels) {
 		vector<Vec3f> found = findCircles(channels[channel]);
 		found = centerInTable(found);
 		found = toFlat(found);
-		cout << "  " << names[channel] << ": " << found.size() << " circles" << endl;
 		lists.push_back(found);
 	}
 	return mergeCircles(lists, 20);
@@ -244,13 +243,13 @@ vector<Vec4f> locateBalls(const Mat& image) {
 	return removePocketsAndEdges(circles);
 }
 
-vector<Mat> ballMasks(Size size, const vector<Vec4f>& circles, int radius) {
+vector<Mat> ballMasks(Size size, const vector<Vec3f>& circles) {
 	vector<Mat> masks;
 	for (int i = 0; i < circles.size(); i++) {
 		Mat mask(size, CV_8UC1, Scalar(0));
 		Point center(cvRound(circles[i][0]), cvRound(circles[i][1]));
 		// mark each detected ball in the circle 
-		circle(mask, center, radius, Scalar(255, 255, 255), FILLED);
+		circle(mask, center, cvRound(0.75*circles[i][2]), Scalar(255, 255, 255), FILLED);
 		masks.push_back(mask);
 	}
 	return masks;
@@ -339,17 +338,34 @@ void printScore(string label, Score s) {
 	cout << "recall: " << recall << endl;
 	cout << "F1: " << F1 << endl;
 }
+vector<Vec3f> toOriginalPhoto(const vector<Vec4f>& circles) {
+	vector<Vec3f> photo_circles;
+	if (circles.empty()) {
+		return photo_circles;
+	}
+	vector<Point2f> flat_points;
+	for (int i = 0; i < circles.size(); i++) {
+		flat_points.push_back(Point2f(circles[i][0], circles[i][1]));
+	}
+	vector<Point2f> photo_points;
+	perspectiveTransform(flat_points, photo_points, getTableMatrix().inv());
+	for (int i = 0; i < photo_points.size(); i++) {
+		photo_circles.push_back(Vec3f(photo_points[i].x, photo_points[i].y, circles[i][2]));
+	}
+	return photo_circles;
+}
 void analyseImage(const Mat& image, vector<Vec4f>& circles, vector<Mat>& hue_histograms, vector<Mat>& light_histogram) {
 	// this function fills the data needed for stage 2 and is reusable. 
 	circles = locateBalls(image);
-	Mat flat_image = gridTable(image);
-	Mat hls = convertToHLS(flat_image);
+	vector<Vec3f> photo_circle = toOriginalPhoto(circles);
+	Mat hls = convertToHLS(image);
 	vector<Mat> channels;
 	split(hls, channels);
-	vector<Mat> masks = ballMasks(flat_image.size(), circles, 16);
+	vector<Mat> masks = ballMasks(image.size(), photo_circle);
 	hue_histograms = describeBalls(channels[0], masks, 18, 180);
 	light_histogram = describeBalls(channels[1], masks, 16, 256);
 }
+
 vector<int> identifyBall(const vector<Vec4f>& circles, const Point tableAnswers[16]) {
 	vector<int> results;
 	for (int i = 0; i < circles.size(); i++) {
@@ -417,17 +433,11 @@ void MyApplication()
 			return;
 		}
 		flat_images[i] = gridTable(image);
-
-		Mat hls = convertToHLS(image);
-		vector<Mat> channels;
-		split(hls, channels);
-		imshow("Hue", channels[0]);
-		imshow("Lightness", channels[1]);
-		imshow("Saturation", channels[2]);
 		imshow("Table ", flat_images[i]);
 		cout << "Table " << i + 1 << ":" << endl;
-		vector<Vec4f> circles = findCirclesInChannels(channels);
-		circles = removePocketsAndEdges(circles);
+		vector<Vec4f> circles;
+		vector<Mat> hue_hists, light_hists;
+		analyseImage(image, circles, hue_hists, light_hists);
 		Score s = scoreTable(circles, i, 21);
 		printScore("Table " + to_string(i + 1), s);
 		if (i < 6) {
@@ -435,19 +445,6 @@ void MyApplication()
 			total.false_detection += s.false_detection;
 			total.missed += s.missed;
 			cout << "Table " << i + 1 << ": " << circles.size() << " circles found" << endl;
-		}
-		Mat flat_hls = convertToHLS(flat_images[i]);
-		vector<Mat> flat_channels;
-		split(flat_hls, flat_channels);
-		vector<Mat> masks = ballMasks(flat_images[i].size(), circles, 16);
-		vector<Mat> hue_hists = describeBalls(flat_channels[0], masks, 18, 180);
-		vector<Mat> light_hists = describeBalls(flat_channels[1], masks, 16, 256);
-		for (size_t k = 0; k < circles.size(); k++) {
-			Point hue_peak, light_peak;
-			minMaxLoc(hue_hists[k], 0, 0, 0, &hue_peak);
-			minMaxLoc(light_hists[k], 0, 0, 0, &light_peak);
-			cout << "  (" << cvRound(circles[k][0]) << ", " << cvRound(circles[k][1]) << ")"
-				<< "  hue bin " << hue_peak.y << "  light bin " << light_peak.y << endl;
 		}
 		vector<int> names;
 		Mat found = flat_images[i].clone();
